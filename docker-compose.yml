@@ -1,0 +1,14 @@
+services:
+  automate-service:
+    image: n8nio/n8n
+    ports:
+      - 5678:5678
+    volumes:
+      - automate-service-data:/home/node/.n8n
+    environment:
+      - PROVISIONING_SECRET=${PROVISIONING_SECRET}
+      - PROVISIONING_SECRET_REQUIRED=$(PROVISIONING_SECRET_REQUIRED)
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+
+volumes:
+  automate-service-data:
