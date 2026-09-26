@@ -7,8 +7,11 @@ services:
       - automate-service-data:/home/node/.n8n
     environment:
       - PROVISIONING_SECRET=${PROVISIONING_SECRET}
-      - PROVISIONING_SECRET_REQUIRED=${PROVISIONING_SECRET_REQUIRED}
+      - PROVISIONING_SECRET_REQUIRED=${PROVISIONING_SECRET_REQUIRED:-true}
       - N8N_BLOCK_ENV_ACCESS_IN_NODE=false
+      - TWENTY_ADMIN_EMAIL=${TWENTY_ADMIN_EMAIL}
+      - TWENTY_ADMIN_PASSWORD=${TWENTY_ADMIN_PASSWORD}
+      - SERVER_URL=${SERVER_URL:-http://localhost:3000}
   server:
     image: twentycrm/twenty:${TAG:-latest}
     volumes:

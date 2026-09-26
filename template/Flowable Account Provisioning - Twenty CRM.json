@@ -210,7 +210,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "{\n  \"query\": \"mutation getLoginTokenFromCredentials($email: String!, $password: String!, $origin: String!) {\\n  getLoginTokenFromCredentials(email: $email, password: $password, origin: $origin) {\\n    loginToken {\\n      token\\n    }\\n  }\\n}\",\n  \"variables\": {\n    \"email\": \"admin-email@example.com\",\n    \"password\": \"admin-pass\",\n    \"origin\": \"http://localhost:3000\"\n  },\n  \"operationName\": \"getLoginTokenFromCredentials\"\n}",
+        "jsonBody": "={\n  \"query\": \"mutation getLoginTokenFromCredentials($email: String!, $password: String!, $origin: String!) {\\n  getLoginTokenFromCredentials(email: $email, password: $password, origin: $origin) {\\n    loginToken {\\n      token\\n    }\\n  }\\n}\",\n  \"variables\": {\n    \"email\": \"{{ $env.TWENTY_ADMIN_EMAIL }}\",\n    \"password\": \"{{ $env.TWENTY_ADMIN_PASSWORD }}\",\n    \"origin\": \"{{ $env.SERVER_URL || 'http://localhost:3000' }}\"\n  },\n  \"operationName\": \"getLoginTokenFromCredentials\"\n}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -232,7 +232,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n  \"query\": \"mutation getAuthTokensFromLoginToken($loginToken: String!, $origin: String!) {\\n  getAuthTokensFromLoginToken(loginToken: $loginToken, origin: $origin) {\\n    tokens {\\n      accessOrWorkspaceAgnosticToken {\\n        token\\n      }\\n    }\\n  }\\n}\",\n  \"variables\": {\n    \"loginToken\": \"{{ $json.data.getLoginTokenFromCredentials.loginToken.token }}\",\n    \"origin\": \"http://localhost:3000\"\n  },\n  \"operationName\": \"getAuthTokensFromLoginToken\"\n} ",
+        "jsonBody": "={\n  \"query\": \"mutation getAuthTokensFromLoginToken($loginToken: String!, $origin: String!) {\\n  getAuthTokensFromLoginToken(loginToken: $loginToken, origin: $origin) {\\n    tokens {\\n      accessOrWorkspaceAgnosticToken {\\n        token\\n      }\\n    }\\n  }\\n}\",\n  \"variables\": {\n    \"loginToken\": \"{{ $json.data.getLoginTokenFromCredentials.loginToken.token }}\",\n    \"origin\": \"{{ $env.SERVER_URL || 'http://localhost:3000' }}\"\n  },\n  \"operationName\": \"getAuthTokensFromLoginToken\"\n}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -253,7 +253,7 @@
           "parameters": [
             {
               "name": "Authorization",
-              "value": "=Bearer  {{ $json.data.getAuthTokensFromLoginToken.tokens.accessOrWorkspaceAgnosticToken.token }}"
+              "value": "=Bearer {{ $json.data.getAuthTokensFromLoginToken.tokens.accessOrWorkspaceAgnosticToken.token }}"
             }
           ]
         },

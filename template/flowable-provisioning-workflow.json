@@ -10,10 +10,10 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -680,
-        -260
+        -480,
+        32
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000001",
+      "id": "1d083296-01fe-4f3e-b151-fc37eb990ddf",
       "name": "Read Me"
     },
     {
@@ -26,10 +26,10 @@
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
       "position": [
-        -680,
-        0
+        -720,
+        320
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000002",
+      "id": "77487ca6-5065-4c90-b351-9784b3f04bd9",
       "name": "Webhook",
       "webhookId": "9f6a1b1e-0000-4000-8000-000000000002"
     },
@@ -60,10 +60,10 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.2,
       "position": [
-        -440,
-        0
+        -272,
+        272
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000003",
+      "id": "7961ceca-19c6-4812-9b4a-c8a0d9570753",
       "name": "Check Secret"
     },
     {
@@ -75,10 +75,10 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -200,
-        -280
+        0,
+        0
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000004",
+      "id": "248960f8-e6ce-473b-9dff-8ec868e4045e",
       "name": "Customize: create the account"
     },
     {
@@ -93,10 +93,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -200,
-        0
+        -16,
+        336
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000005",
+      "id": "a605b24e-aa59-4ee0-b4f8-7eb3cf058bb9",
       "name": "Create Account (customize)"
     },
     {
@@ -116,10 +116,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        40,
-        0
+        240,
+        288
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000006",
+      "id": "6f5b3363-3294-448a-b0cc-0ed47e5ab28d",
       "name": "Shape Response"
     },
     {
@@ -133,10 +133,10 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        280,
-        0
+        480,
+        288
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000007",
+      "id": "89ef4b71-2093-440b-b039-76e3e7bb2f96",
       "name": "Respond: Success"
     },
     {
@@ -150,11 +150,46 @@
       "type": "n8n-nodes-base.respondToWebhook",
       "typeVersion": 1.1,
       "position": [
-        -440,
-        220
+        -240,
+        512
       ],
-      "id": "9f6a1b1e-0000-4000-8000-000000000008",
+      "id": "6f633b09-0654-4ac7-961d-cfb14f982e04",
       "name": "Respond: Unauthorized"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a3825e4d-3c23-4eb8-849a-243fde5893f4",
+              "leftValue": "={{ $env.PROVISIONING_SECRET_REQUIRED }}",
+              "rightValue": "={{ true }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -496,
+        320
+      ],
+      "id": "80004ee2-4750-49fe-b893-5d766d226c7f",
+      "name": "If"
     }
   ],
   "pinData": {},
@@ -163,7 +198,7 @@
       "main": [
         [
           {
-            "node": "Check Secret",
+            "node": "If",
             "type": "main",
             "index": 0
           }
@@ -209,12 +244,36 @@
           }
         ]
       ]
+    },
+    "If": {
+      "main": [
+        [
+          {
+            "node": "Check Secret",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Account (customize)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": false,
   "settings": {
-    "executionOrder": "v1"
+    "executionOrder": "v1",
+    "binaryMode": "separate"
   },
-  "id": "provisioning-template",
+  "versionId": "e69effae-07c3-4875-beec-af6ee99cc509",
+  "meta": {
+    "instanceId": "7519d1b63ed9e60d78c863d35186843268dde907e15403e1265c7dc9b4741284"
+  },
+  "nodeGroups": [],
+  "id": "p8oaeXbFWK0u3JIq",
   "tags": []
 }
