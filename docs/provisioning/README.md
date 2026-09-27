@@ -7,6 +7,7 @@ Every tool-specific workflow originates from the canonical base template (`templ
 
 - **DEV-868**: Account Provisioning Base Framework & Ingress Security
 - **DEV-869**: Twenty CRM Account Provisioning Integration
+- **DEV-870**: Mat
 
 ---
 
@@ -77,11 +78,13 @@ To streamline local testing and iterative development without sending authentica
 
 ---
 
-## 5. Twenty CRM Integration (DEV-869)
+## 5. Provisionings Features
+
+### Twenty CRM Integration (DEV-869)
 
 The Twenty CRM workflow (`template/Flowable Account Provisioning - Twenty CRM.json`) provisions new workspace members automatically.
 
-### Architecture & Invocation Flow
+#### Architecture & Invocation Flow
 Due to permission boundaries and API structures in Twenty CRM, standard admin API keys cannot perform workspace member creation on the primary `/graphql` endpoint (which returns `403 Forbidden`). Instead, the workflow orchestrates user admin authentication against Twenty CRM's `/metadata` endpoint (internally addressed as `http://server:3000/metadata` within Docker Compose, with `$env.SERVER_URL` passed as the client `origin` variable):
 
 1. **`Login to Admin`**:
@@ -98,13 +101,13 @@ Due to permission boundaries and API structures in Twenty CRM, standard admin AP
 5. **`Shape Response` & `Respond: Success`**:
    - Normalizes response to `{ "username": employeeEmail }` and returns `HTTP 201 Created`.
 
-### Password Handling Bypass
+#### Password Handling Bypass
 The `password` parameter sent in the ingress webhook is **received but intentionally ignored**:
 - Twenty CRM's member invitation API (`sendInvitations`) does not support setting passwords directly.
 - The invited user receives an email invitation containing a secure link to accept and configure their own password.
 - Any password supplied in the webhook payload is safely discarded and never transmitted or logged.
 
-### Workflow Diagram & Acceptances
+#### Workflow Diagram & Acceptances
 ![N8N Twenty CRM Workflow](../daily/20260913_DEV-869_Acceptances/twentycrm-workflow.png)
 
 - Acceptance: [New member created in workspace](../daily/20260913_DEV-869_Acceptances/twentycrm-invited.png)
@@ -112,6 +115,37 @@ The `password` parameter sent in the ingress webhook is **received but intention
 - Acceptance: [Unauthorized request rejection](../daily/20260913_DEV-869_Acceptances/request.png)
 
 ---
+
+### Mattermost Integration (DEV-870)
+
+The Mattermost workflow (`template/Flowable Account Provisioning - Mattermost.json`) provisions new team members automatically.
+
+#### Architecture & Invocation Flow
+Mattermost's `/api/v4/users` endpoint requires an authenticated admin session (open signup is disabled), so the workflow first authenticates as admin before creating the account:
+
+1. **`If` / `Check Secret`**:
+   - Validates `x-provisioning-key` header against `$env.PROVISIONING_SECRET` (only when `$env.PROVISIONING_SECRET_REQUIRED` is true).
+   - Rejects with `401 Unauthorized` on mismatch.
+2. **`Admin Access to Mattermost`**:
+   - Calls `POST /api/v4/users/login` against `http://mattermost:8065` using `$env.MATTERMOST_ADMIN_EMAIL` and `$env.MATTERMOST_ADMIN_PASSWORD`.
+   - Obtains the session token from the response `Token` header.
+3. **`Invite Account to Mattermost` (Create Account, customize)**:
+   - Calls `POST /api/v4/users` with bearer token, using `employeeEmail`/`password` from the webhook body and a derived `username` (email prefix).
+   - Creates the account with default system role `system_user`.
+4. **`List Team`**:
+   - Calls `GET /api/v4/teams` with bearer token to resolve the target team ID.
+5. **`Invite to First Team`**:
+   - Calls `POST /api/v4/teams/{team_id}/members` passing `team_id` and the created `user_id`.
+   - Adds the user with default team role `team_user`.
+6. **`Shape Response` & `Respond: Success`**:
+   - Normalizes response to `{ "username": createdUsername }` and returns `HTTP 201 Created`.
+
+#### Workflow Diagram & Acceptances
+![N8N Mattermost Workflow](../daily/20260927_DEV-870_Acceptances/mm-workflow.png)
+
+- Acceptance: [Account created with `system_user` role](../daily/20260927_DEV-870_Acceptances/mm-invited-role.png)
+- Acceptance: [Assigned standard `team_user` role on team](../daily/20260927_DEV-870_Acceptances/mm-system-console.png)
+- Acceptance: [Unauthorized request rejection](../daily/20260927_DEV-870_Acceptances/mm-allrequests.png)
 
 ## 6. Environment Variables
 
@@ -132,6 +166,7 @@ The following environment variables configure the provisioning service and its i
 
 - **`template/flowable-provisioning-workflow.json`**: Canonical base template for all new tool integrations, preconfigured with webhook ingress, `PROVISIONING_SECRET_REQUIRED` switch, secret authentication, and 201/401 response nodes.
 - **`template/Flowable Account Provisioning - Twenty CRM.json`**: Complete, production-ready integration workflow for Twenty CRM.
+- **`template/Flowable Account Provisioning - Mattermost.json`**: Complete, production-ready integration workflow for Mattermost.
 
 ---
 
@@ -142,7 +177,8 @@ The following environment variables configure the provisioning service and its i
 |---|---|---|
 | 10 Sep 2026 | Base configuration, Docker Compose setup, and repository creation | [Repository](https://github.com/ReyzuaWeh/automate-account-provisioning) |
 | 12 Sep 2026 | Initial Twenty CRM investigation; identified API key permission boundary | [Role Permission Issue](../daily/20260912/twentycrm-forbidden.png) |
-| 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
+| 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [DEv-869 - Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
+| 27 Sep 2026 | Create automation invitation for Mattermost. DEV-870 | [DEV-870 Acceptance Evidence](../daily/20260927_DEV-870_Acceptances/) |
 
 ### Technical Problem & Resolution: Twenty CRM Permissions
 When invoking `CreateWorkspaceMember` on `/graphql` using an API key, Twenty CRM rejects the request with `403 Forbidden` because API keys lack workspace membership management capabilities.
