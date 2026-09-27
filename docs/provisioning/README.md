@@ -1,62 +1,168 @@
-# Overview
-Setting an n8n workflows that automatically create a user account — with the correct
-default role — in each of our internal tools whenever a provisioning webhook is triggered.
-Every workflow starts from the same base template (flowable-provisioning-workflow.json,
-attached to this ticket) rather than being built from scratch.
+# Flowable Account Provisioning Specification (DEV-868 & DEV-869)
 
-CODE : *DEV-868*
+## 1. Overview
+This repository provides automated n8n workflows that provision user accounts with appropriate default roles in internal tools whenever a central provisioning webhook is triggered.
 
-# Sub Tasks
-## Twenty CRM (DEV-869)
-**Story**: As an operator, I want an n8n workflow that provisions a new TwentyCRM workspace member with the standard role, so a new hire gets CRM access without manual setup.
+Every tool-specific workflow originates from the canonical base template (`template/flowable-provisioning-workflow.json`), ensuring uniform authentication validation, response shaping, and error handling across integrations.
 
-## Password Field
-The `password` field sent in the webhook payload is **received but intentionally ignored**.
+- **DEV-868**: Account Provisioning Base Framework & Ingress Security
+- **DEV-869**: Twenty CRM Account Provisioning Integration
 
-TwentyCRM's invite flow (`sendInvitations`) does not accept a pre-set password because there is no argument for it in the API. Instead, the invited user sets their own password when they accept the invite email. Any password value sent in the webhook is discarded, not stored, and not forwarded to TwentyCRM.
+---
 
-### How's the Workflow?
-Choosing to use the same workflow like inviting in UI due to [problem](README.md#twenty-crm) found while working on it. Here is the detail.
+## 2. Ingress Contract
 
-![N8N Twenty CRM Workflow](../daily/20260913_DEV-869_Acceptances/twentycrm-workflow.png)
+All provisioning requests enter through a standardized HTTP webhook endpoint configured on the n8n automate service.
 
-### Acceptance
-1. [New member shows up](../daily/20260913_DEV-869_Acceptances/twentycrm-invited.png)
-2. [Role assigned is Member](../daily/20260913_DEV-869_Acceptances/twentycrm-invited.png)
-3. [Wrong secret](../daily/20260913_DEV-869_Acceptances/request.png)
-4. [Password Note](README.md#password-field)
+- **Endpoint**: `POST /webhook/provision-account` (or `POST /webhook-test/provision-account` during testing)
+- **Headers**:
+  - `Content-Type: application/json`
+  - `x-provisioning-key`: `<PROVISIONING_SECRET>` (shared webhook authentication secret)
 
-# Daily Progress
-| Date | Summary | Evicdence |
-| --- | --- | --- |
-| 10 September 2026 | Create a base configuration, docker compose file, and github repository | [Github Repository](https://github.com/ReyzuaWeh/automate-account-provisioning) |
-| 12 September 2026 | Planning to continue task for TwentyCRM config (DEV-869). However, there's an issue I found about role's permission | [Role Permission Problem](../daily/20260912/twentycrm-forbidden.png)
-| 13 September 2026 | Targetting to fix TwentyCRM role's permission issue and completed DEV-869 if possible | [DEV-869 Complete](../daily/20260913_DEV-869_Acceptances/) |
-
-
-# Development Struggle
-## Twenty CRM
-1. Forbidden Permission
-
-![Role Permission Problem](../daily/20260912/twentycrm-forbidden.png)
-
-Can't add member due to forbidden. It's actually has used api key from admin, still the problem still remain. Haven't found any solutiun for it now.
-
-**SOLUTION**
->DO NOT USE `/graphql` ENDPOINT. USE `/metadata`
-The problem I've got before is because I'm using `/graphql` endpoint and using `CreateWorkspaceMember` mutation. The solution is to use `/metadata` endpoint instead. The request body for invite should be like this:
+### Request Payload Schema
 ```json
 {
-    "query": "mutation SendInvitations($emails: [String!]!, $roleId: UUID) {\n  sendInvitations(emails: $emails, roleId: $roleId) {\n    success\n    errors\n    result {\n      ... on WorkspaceInvitation {\n        id\n        email\n        roleId\n        expiresAt\n      }\n    }\n  }\n}",
-    "variables": {
-        "emails": [
-            "{{ $json.body.employeeEmail }}"
-        ]
-    },
-    "operationName": "SendInvitations"
+  "employeeEmail": "employee@example.com",
+  "employeeName": "Jane Doe",
+  "password": "TemporaryOrGeneratedPassword"
 }
 ```
 
->Note: Also, I find that admin api key has a limited acces than user admin. the token use user admin token.
+| Field | Type | Description |
+|---|---|---|
+| `employeeEmail` | `string` | The work email address for the user account (required). |
+| `employeeName` | `string` | The full name of the employee (required). |
+| `password` | `string` | Generated temporary password (optional/tool-dependent; see tool-specific notes). |
 
+---
 
+## 3. Error Handling & Status Codes
+
+All workflows follow consistent HTTP status and error contracts:
+
+### HTTP 201 Created (Success)
+Returned when user provisioning or invitation succeeds.
+
+- **Status Code**: `201 Created`
+- **Response Body**:
+```json
+{
+  "username": "employee@example.com"
+}
+```
+*Note: The `username` field returns the identifier created or mapped in the target tool (typically the employee email).*
+
+### HTTP 401 Unauthorized (Auth Failure)
+Returned when secret verification fails (invalid or missing `x-provisioning-key`).
+
+- **Status Code**: `401 Unauthorized`
+- **Response Body**:
+```json
+{
+  "error": "Unauthorized"
+}
+```
+
+---
+
+## 4. Local Fast-Iteration Switch (`PROVISIONING_SECRET_REQUIRED`)
+
+To streamline local testing and iterative development without sending authentication headers repeatedly, workflows support a bypass switch:
+
+- **Environment Variable**: `PROVISIONING_SECRET_REQUIRED`
+- **Default (Production / Hardened)**: `true`
+- **Behavior**:
+  - When `true`: The workflow routes incoming requests from the `Webhook` node to the `If` node, which evaluates `PROVISIONING_SECRET_REQUIRED`. Since it is true, requests route through the `Check Secret` node, verifying that `$json.headers['x-provisioning-key'] === $env.PROVISIONING_SECRET`. Requests with missing or invalid keys return `HTTP 401 Unauthorized`.
+  - When `false`: The `If` node bypasses `Check Secret` entirely and routes directly to the tool provisioning sequence (`Create Account` / `Login to Admin`).
+
+---
+
+## 5. Twenty CRM Integration (DEV-869)
+
+The Twenty CRM workflow (`template/Flowable Account Provisioning - Twenty CRM.json`) provisions new workspace members automatically.
+
+### Architecture & Invocation Flow
+Due to permission boundaries and API structures in Twenty CRM, standard admin API keys cannot perform workspace member creation on the primary `/graphql` endpoint (which returns `403 Forbidden`). Instead, the workflow orchestrates user admin authentication against Twenty CRM's `/metadata` endpoint (internally addressed as `http://server:3000/metadata` within Docker Compose, with `$env.SERVER_URL` passed as the client `origin` variable):
+
+1. **`Login to Admin`**:
+   - Calls `mutation getLoginTokenFromCredentials` against `http://server:3000/metadata` using `$env.TWENTY_ADMIN_EMAIL`, `$env.TWENTY_ADMIN_PASSWORD`, and origin `$env.SERVER_URL`.
+   - Obtains a short-lived `loginToken`.
+2. **`Get Admin Token`**:
+   - Calls `mutation getAuthTokensFromLoginToken` against `http://server:3000/metadata` using the `loginToken` and origin `$env.SERVER_URL`.
+   - Obtains the admin session token (`accessOrWorkspaceAgnosticToken`).
+3. **`Get Member Role`**:
+   - Calls `query GetRoles` against `http://server:3000/metadata` with bearer authorization.
+   - Dynamically resolves the role ID where `label === "Member"` (`$json.data.getRoles.find(item => item.label === "Member")?.id`).
+4. **`Create Account (customize)` / Send Invitations**:
+   - Executes `mutation SendInvitations` against `http://server:3000/metadata` passing `$json.body.employeeEmail` and the dynamically resolved `roleId`.
+5. **`Shape Response` & `Respond: Success`**:
+   - Normalizes response to `{ "username": employeeEmail }` and returns `HTTP 201 Created`.
+
+### Password Handling Bypass
+The `password` parameter sent in the ingress webhook is **received but intentionally ignored**:
+- Twenty CRM's member invitation API (`sendInvitations`) does not support setting passwords directly.
+- The invited user receives an email invitation containing a secure link to accept and configure their own password.
+- Any password supplied in the webhook payload is safely discarded and never transmitted or logged.
+
+### Workflow Diagram & Acceptances
+![N8N Twenty CRM Workflow](../daily/20260913_DEV-869_Acceptances/twentycrm-workflow.png)
+
+- Acceptance: [New member created in workspace](../daily/20260913_DEV-869_Acceptances/twentycrm-invited.png)
+- Acceptance: [Assigned standard Member role](../daily/20260913_DEV-869_Acceptances/twentycrm-invited.png)
+- Acceptance: [Unauthorized request rejection](../daily/20260913_DEV-869_Acceptances/request.png)
+
+---
+
+## 6. Environment Variables
+
+The following environment variables configure the provisioning service and its integration dependencies:
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `PROVISIONING_SECRET` | Yes (in prod) | — | Shared secret token expected in the `x-provisioning-key` header. |
+| `PROVISIONING_SECRET_REQUIRED` | No | `true` | When `true`, enforces secret check. Set to `false` for local test bypass. |
+| `N8N_BLOCK_ENV_ACCESS_IN_NODE` | No | `false` | Must be `false` to allow n8n workflow expressions to read `$env.*`. |
+| `SERVER_URL` | No | `http://localhost:3000` | Public base URL / origin of the Twenty CRM server instance passed to token mutations. |
+| `TWENTY_ADMIN_EMAIL` | Yes (Twenty CRM) | — | Admin email used to authenticate Twenty CRM invite mutations. |
+| `TWENTY_ADMIN_PASSWORD` | Yes (Twenty CRM) | — | Admin password used to authenticate Twenty CRM invite mutations. |
+
+---
+
+## 7. Workflow Templates
+
+- **`template/flowable-provisioning-workflow.json`**: Canonical base template for all new tool integrations, preconfigured with webhook ingress, `PROVISIONING_SECRET_REQUIRED` switch, secret authentication, and 201/401 response nodes.
+- **`template/Flowable Account Provisioning - Twenty CRM.json`**: Complete, production-ready integration workflow for Twenty CRM.
+
+---
+
+## 8. Development History & Technical Notes
+
+### Progress Log
+| Date | Milestone | Reference |
+|---|---|---|
+| 10 Sep 2026 | Base configuration, Docker Compose setup, and repository creation | [Repository](https://github.com/ReyzuaWeh/automate-account-provisioning) |
+| 12 Sep 2026 | Initial Twenty CRM investigation; identified API key permission boundary | [Role Permission Issue](../daily/20260912/twentycrm-forbidden.png) |
+| 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
+
+### Technical Problem & Resolution: Twenty CRM Permissions
+When invoking `CreateWorkspaceMember` on `/graphql` using an API key, Twenty CRM rejects the request with `403 Forbidden` because API keys lack workspace membership management capabilities.
+
+**Resolution**:
+Send invitations via the `/metadata` endpoint using `sendInvitations`:
+```graphql
+mutation SendInvitations($emails: [String!]!, $roleId: UUID) {
+  sendInvitations(emails: $emails, roleId: $roleId) {
+    success
+    errors
+    result {
+      ... on WorkspaceInvitation {
+        id
+        email
+        roleId
+        expiresAt
+      }
+    }
+  }
+}
+```
+This requires an admin user token obtained through `getLoginTokenFromCredentials` and `getAuthTokensFromLoginToken`.
