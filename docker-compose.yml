@@ -1,21 +1,3 @@
-x-customizable-image: &customizable_image
-  # By default the image used only contains the `frappe` and `erpnext` apps.
-  # See https://github.com/frappe/frappe_docker/blob/main/docs/02-setup/02-build-setup.md#define-custom-apps
-  # about using custom images.
-  image: ${CUSTOM_IMAGE:-frappe/erpnext}:${CUSTOM_TAG:-$ERPNEXT_VERSION}
-  pull_policy: ${PULL_POLICY:-always}
-  restart: ${RESTART_POLICY:-unless-stopped}
-
-x-depends-on-configurator: &depends_on_configurator
-  depends_on:
-    configurator:
-      condition: service_completed_successfully
-
-x-backend-defaults: &backend_defaults
-  <<: [*depends_on_configurator, *customizable_image]
-  volumes:
-    - sites:/home/frappe/frappe-bench/sites
-
 services:
   automate-service:
     image: n8nio/n8n
@@ -33,6 +15,7 @@ services:
       - MATTERMOST_URL=${MATTERMOST_URL:-http://mattermost:8065}
       - MATTERMOST_ADMIN_EMAIL=${MATTERMOST_ADMIN_EMAIL}
       - MATTERMOST_ADMIN_PASSWORD=${MATTERMOST_ADMIN_PASSWORD}
+      - NEXT_ERP_TOKEN=${NEXT_ERP_TOKEN}
   server:
     image: twentycrm/twenty:${TAG:-latest}
     volumes:

@@ -147,6 +147,78 @@ Mattermost's `/api/v4/users` endpoint requires an authenticated admin session (o
 - Acceptance: [Assigned standard `team_user` role on team](../daily/20260927_DEV-870_Acceptances/mm-system-console.png)
 - Acceptance: [Unauthorized request rejection](../daily/20260927_DEV-870_Acceptances/mm-allrequests.png)
 
+
+### NextERP Integration (DEV-871)
+
+The NextERP workflow (`template/Flowable Account Provisioning - NextERP.json`) provisions new team members automatically.
+
+#### Architecture & Invocation Flow
+NextERP (ERPNext) `/api/resource/User` requires an API token, and the `Employee` role is only retained if the user is linked to an `Employee` record. The workflow therefore creates the User first, then the linked Employee:
+
+1. **`If` / `Check Secret`**:
+   - `If` checks `$env.PROVISIONING_SECRET_REQUIRED`. When true, the request goes to `Check Secret`; otherwise it goes straight to `Create Account`.
+   - `Check Secret` validates the `x-provisioning-key` header against `$env.PROVISIONING_SECRET`.
+   - Mismatch → `Respond: Unauthorized` returns `401 Unauthorized`.
+2. **`Create Account` (customize)**:
+   - Calls `POST http://erpnext-frontend:8080/api/resource/User` (same Docker network as the ERPNext frontend).
+   - Auth: header `Authorization: token $env.NEXT_ERP_TOKEN` (format `API_KEY:API_SECRET`, generated from a dedicated integration user under User → API Access → Generate Keys).
+   - Body (JSON mode, `roles` must be an array of objects):
+```json
+     {
+       "email": "{{ $json.body.employeeEmail }}",
+       "first_name": "{{ $json.body.employeeName }}",
+       "new_password": "{{ $json.body.password }}",
+       "send_welcome_email": 0,
+       "gender": "Male",
+       "roles": [{"role": "Employee"}]
+     }
+```
+   - Creates the account with role `Employee` only (no System Manager / HR Manager / Accounts Manager).
+3. **`Give Employee Role`**:
+   - Calls `POST http://erpnext-frontend:8080/api/resource/Employee`, using the User response (`$json.data.first_name`, `$json.data.email`) to link `user_id`.
+   - Required because ERPNext removes the `Employee` role from users without a mapped Employee ("Removed Employee role as there is no mapped employee").
+   - Body:
+```json
+     {
+       "first_name": "{{ $json.data.first_name }}",
+       "user_id": "{{ $json.data.email }}",
+       "gender": "Male",
+       "date_of_birth": "1990-01-01",
+       "date_of_joining": "{{ $today.toFormat('yyyy-MM-dd') }}",
+       "status": "Active"
+     }
+```
+   - `gender`, `date_of_birth`, `date_of_joining` are standard mandatory fields (cannot be made optional via Customize Form). Values are **placeholders** to be completed by HR, since the webhook only supplies name/email/password.
+4. **`Shape Response` & `Respond: Success`**:
+   - `Shape Response` sets `username` from the webhook `employeeEmail` (the ERPNext login identifier is the email, i.e. the User `name` field; verified by test login).
+   - Returns `{ "username": "<email>" }` with `HTTP 201 Created`.
+
+#### Configuration
+| Item | Value |
+|------|-------|
+| Endpoints | `POST /api/resource/User`, `POST /api/resource/Employee` |
+| Base URL | `http://erpnext-frontend:8080` (use `http://`, not `https://`) |
+| Auth | `Authorization: token <API_KEY>:<API_SECRET>` |
+| Env vars | `NEXT_ERP_TOKEN` it's `<API_KEY>:<API_SECRET>`, `PROVISIONING_SECRET`, `PROVISIONING_SECRET_REQUIRED` |
+
+#### Verification
+- List users / check role: `GET /api/resource/User/<email>?fields=["name","roles"]` or `http://localhost:8080/app/user/<email>`.
+- Check Employee link: `http://localhost:8080/app/employee?user_id=<email>`.
+- Login test: sign in at `http://localhost:8080/login` using the email and provided password.
+
+#### Notes
+- **Module Profile**: the default (all modules visible) was confirmed with the ERPNext admin owner as `<intended / narrowed to ...>`. Module Profile controls module visibility, not permissions.
+- Placeholder Employee fields (`gender`, `date_of_birth`, `date_of_joining`) are mandatory in ERPNext and cannot be made optional via Customize Form. They are set to default values and should be updated by HR after account creation.
+- You may get `NEXT_ERP_TOKEN` by creating a dedicated integration user in ERPNext, then generating API keys for that user (User → API Access → Generate Keys). Use the format `<API_KEY>:<API_SECRET>` as the token.
+
+#### Workflow Diagram & Acceptances
+![N8N ERPNext Workflow](../daily/20260929_DEV-871_Acceptances/nexterp-workflow.png)
+
+- Acceptance: [Endpoint/auth documented in ticket and README](#architecture--invocation-flow)
+- Acceptance: [Account created with `Employee` role (non-admin) in admin UI](../daily/20260929_DEV-871_Acceptances/nexterp-user-role.png)
+- Acceptance: [Module Profile default confirmed with NextERP admin owner](../daily/20260929_DEV-871_Acceptances/nexterp-user-modules.png)
+- Acceptance: [Unauthorized request rejection (wrong secret → 401)](../daily/20260929_DEV-871_Acceptances/nexterp-requests.png)
+
 ## 6. Environment Variables
 
 The following environment variables configure the provisioning service and its integration dependencies:
@@ -159,6 +231,9 @@ The following environment variables configure the provisioning service and its i
 | `SERVER_URL` | No | `http://localhost:3000` | Public base URL / origin of the Twenty CRM server instance passed to token mutations. |
 | `TWENTY_ADMIN_EMAIL` | Yes (Twenty CRM) | — | Admin email used to authenticate Twenty CRM invite mutations. |
 | `TWENTY_ADMIN_PASSWORD` | Yes (Twenty CRM) | — | Admin password used to authenticate Twenty CRM invite mutations. |
+| `MATTERMOST_ADMIN_EMAIL` | Yes (Mattermost) | — | Admin email used to authenticate Mattermost account creation. |
+| `MATTERMOST_ADMIN_PASSWORD` | Yes (Mattermost) | — | Admin password used to authenticate Mattermost account creation. |
+| `NEXT_ERP_TOKEN` | Yes (NextERP) | — | API token in the format `<API_KEY>:<API_SECRET>` for NextERP integration user. |
 
 ---
 
@@ -167,6 +242,7 @@ The following environment variables configure the provisioning service and its i
 - **`template/flowable-provisioning-workflow.json`**: Canonical base template for all new tool integrations, preconfigured with webhook ingress, `PROVISIONING_SECRET_REQUIRED` switch, secret authentication, and 201/401 response nodes.
 - **`template/Flowable Account Provisioning - Twenty CRM.json`**: Complete, production-ready integration workflow for Twenty CRM.
 - **`template/Flowable Account Provisioning - Mattermost.json`**: Complete, production-ready integration workflow for Mattermost.
+- **`template/Flowable Account Provisioning - NextERP.json`**: Complete, production-ready integration workflow for NextERP (ERPNext).
 
 ---
 
@@ -179,6 +255,8 @@ The following environment variables configure the provisioning service and its i
 | 12 Sep 2026 | Initial Twenty CRM investigation; identified API key permission boundary | [Role Permission Issue](../daily/20260912/twentycrm-forbidden.png) |
 | 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [DEv-869 - Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
 | 27 Sep 2026 | Create automation invitation for Mattermost. DEV-870 | [DEV-870 Acceptance Evidence](../daily/20260927_DEV-870_Acceptances/) |
+| 29 Sep 2026 | Create automation provisioning NextERP with its detail condition. DEV-871 |
+
 
 ### Technical Problem & Resolution: Twenty CRM Permissions
 When invoking `CreateWorkspaceMember` on `/graphql` using an API key, Twenty CRM rejects the request with `403 Forbidden` because API keys lack workspace membership management capabilities.
