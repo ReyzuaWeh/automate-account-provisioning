@@ -4,14 +4,14 @@ x-superset: &superset
     dockerfile_inline: |
       FROM apache/superset:${SUPERSET_VERSION:-6.0.0}
       USER root
-      RUN pip install --no-cache-dir psycopg2-binary
+      RUN uv pip install --python /app/.venv/bin/python psycopg2-binary
       USER superset
   environment: &superset-env
     SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
     SUPERSET_DB_URI: postgresql+psycopg2://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/superset
     SUPERSET_REDIS_URL: redis://superset-redis:6379/0
   volumes:
-    - ./superset_config.py:/app/pythonpath/superset_config.py:ro
+    - ./superset-config.py:/app/pythonpath/superset_config.py:ro
     - superset-home:/app/superset_home
 services:
   automate-service:
@@ -31,6 +31,8 @@ services:
       - MATTERMOST_ADMIN_EMAIL=${MATTERMOST_ADMIN_EMAIL}
       - MATTERMOST_ADMIN_PASSWORD=${MATTERMOST_ADMIN_PASSWORD}
       - NEXT_ERP_TOKEN=${NEXT_ERP_TOKEN}
+      - SUPERSET_ADMINNAME=${SUPERSET_ADMIN_USER:-admin}
+      - SUPERSET_ADMINPASSWORD=${SUPERSET_ADMIN_PASSWORD:-admin}
   server:
     image: twentycrm/twenty:${TAG:-latest}
     volumes:

@@ -219,6 +219,40 @@ NextERP (ERPNext) `/api/resource/User` requires an API token, and the `Employee`
 - Acceptance: [Module Profile default confirmed with NextERP admin owner](../daily/20260929_DEV-871_Acceptances/nexterp-user-modules.png)
 - Acceptance: [Unauthorized request rejection (wrong secret → 401)](../daily/20260929_DEV-871_Acceptances/nexterp-requests.png)
 
+### Superset Integration (DEV-XXX)
+
+The Superset workflow (`template/Flowable Account Provisioning - SuperSet.json`) provisions new team members automatically with a view-only role.
+
+#### Architecture & Invocation Flow
+Superset's `/api/v1/security/users/` endpoint requires an authenticated admin JWT and `FAB_ADD_SECURITY_API = True` in `superset_config.py`, so the workflow first authenticates as admin before creating the account:
+
+1. **`If` / `Check Secret`**:
+   - Validates `x-provisioning-key` header against `$env.PROVISIONING_SECRET` (only when `$env.PROVISIONING_SECRET_REQUIRED` is true).
+   - Rejects with `401 Unauthorized` on mismatch.
+2. **`Admin Access`**:
+   - Calls `POST /api/v1/security/login` against `http://superset:8088` using `$env.SUPERSET_ADMINNAME` and `$env.SUPERSET_ADMINPASSWORD` with `provider: "db"`.
+   - Obtains the JWT from the response `access_token` field.
+3. **`Get Gamma Role`**:
+   - Calls `GET /api/v1/security/roles/search/` with bearer token and the filter `q=(filters:!((col:name,opr:eq,value:Gamma)))` to resolve the Gamma role ID (`ids`).
+4. **`Create Account (customize)`**:
+   - Calls `POST /api/v1/security/users/` with bearer token, using `employeeName`/`employeeEmail`/`password` from the webhook body.
+   - Derives `first_name` (first word), `last_name` (remaining words), and `username` (name lowercased, spaces replaced by `.`).
+   - Creates the account as `active: true` with only the default role `Gamma` (view-only; no access to any dataset until explicitly granted). Admin and Alpha are never assigned.
+5. **`Shape Response` & `Respond: Success`**:
+   - Normalizes response to `{ "username": createdUsername }` and returns `HTTP 201 Created`.
+
+#### Prerequisites
+- `FAB_ADD_SECURITY_API = True` in `superset_config.py`.
+- `automate-service` environment includes `SUPERSET_ADMINNAME` and `SUPERSET_ADMINPASSWORD`.
+- A dedicated admin/service account is used for provisioning, not a personal admin account.
+
+#### Workflow Diagram & Acceptances
+![N8N Superset Workflow](../daily/20261001/superset-workflow.png)
+
+- Acceptance: [Account created with `Gamma` role only](../daily/20261001/superset-user-role.png)
+- Acceptance: [User sees no dashboard/dataset until granted access](../daily/20261001/superset-dashboard-dataset.png)
+- Acceptance: [Unauthorized request rejection](../daily/20261001/superset-requests.png)
+
 ## 6. Environment Variables
 
 The following environment variables configure the provisioning service and its integration dependencies:
@@ -243,6 +277,7 @@ The following environment variables configure the provisioning service and its i
 - **`template/Flowable Account Provisioning - Twenty CRM.json`**: Complete, production-ready integration workflow for Twenty CRM.
 - **`template/Flowable Account Provisioning - Mattermost.json`**: Complete, production-ready integration workflow for Mattermost.
 - **`template/Flowable Account Provisioning - NextERP.json`**: Complete, production-ready integration workflow for NextERP (ERPNext).
+- **`template/Flowable Account Provisioning - SuperSet.json`**: Complete, production-ready integration workflow for Apache Superset.
 
 ---
 
@@ -255,8 +290,8 @@ The following environment variables configure the provisioning service and its i
 | 12 Sep 2026 | Initial Twenty CRM investigation; identified API key permission boundary | [Role Permission Issue](../daily/20260912/twentycrm-forbidden.png) |
 | 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [DEv-869 - Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
 | 27 Sep 2026 | Create automation invitation for Mattermost. DEV-870 | [DEV-870 Acceptance Evidence](../daily/20260927_DEV-870_Acceptances/) |
-| 29 Sep 2026 | Create automation provisioning NextERP with its detail condition. DEV-871 |
-
+| 29 Sep 2026 | Create automation provisioning NextERP with its detail condition. DEV-871 | [DEV-871 Acceptance Evidence](../daily/20260929_DEV-871_Acceptances/) |
+| 01 Oct 2026 | Create automation provisioning Superset with its detail condition. DEV-872 | [DEV-872 Acceptance Evidence](../daily/20261001/) |
 
 ### Technical Problem & Resolution: Twenty CRM Permissions
 When invoking `CreateWorkspaceMember` on `/graphql` using an API key, Twenty CRM rejects the request with `403 Forbidden` because API keys lack workspace membership management capabilities.
