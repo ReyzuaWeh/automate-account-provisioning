@@ -33,6 +33,7 @@ services:
       - NEXT_ERP_TOKEN=${NEXT_ERP_TOKEN}
       - SUPERSET_ADMINNAME=${SUPERSET_ADMIN_USER:-admin}
       - SUPERSET_ADMINPASSWORD=${SUPERSET_ADMIN_PASSWORD:-admin}
+      - OUTLINE_API_KEY=${OUTLINE_API_KEY}
   server:
     image: twentycrm/twenty:${TAG:-latest}
     volumes:
@@ -405,6 +406,51 @@ services:
       retries: 10
     restart: always
 
+  outline:
+    image: outlinewiki/outline:latest
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_ENV: production
+      URL: http://localhost:3001
+      PORT: 3000
+      SECRET_KEY: ${OUTLINE_SECRET_KEY}
+      UTILS_SECRET: ${OUTLINE_UTILS_SECRET}
+      DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/outline
+      PGSSLMODE: disable
+      REDIS_URL: redis://outline-redis:6379
+      FORCE_HTTPS: "false"
+      FILE_STORAGE: local
+      FILE_STORAGE_LOCAL_ROOT_DIR: /var/lib/outline/data
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
+      SMTP_FROM_EMAIL: outline@local.com
+      RATE_LIMITER_ENABLED: ${OUTLINE_RATE_LIMITER_ENABLED:-true}
+    volumes:
+      - outline-data:/var/lib/outline/data
+    depends_on:
+      db:
+        condition: service_healthy
+      outline-redis:
+        condition: service_healthy
+    restart: always
+
+  outline-redis:
+    image: redis:7-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"
+    restart: always
+
 volumes:
   db-data:
   server-local-data:
@@ -414,3 +460,4 @@ volumes:
   erpnext-sites:
   erpnext-logs:
   superset-home:
+  outline-data:

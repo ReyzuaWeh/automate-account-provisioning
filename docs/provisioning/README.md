@@ -219,7 +219,7 @@ NextERP (ERPNext) `/api/resource/User` requires an API token, and the `Employee`
 - Acceptance: [Module Profile default confirmed with NextERP admin owner](../daily/20260929_DEV-871_Acceptances/nexterp-user-modules.png)
 - Acceptance: [Unauthorized request rejection (wrong secret → 401)](../daily/20260929_DEV-871_Acceptances/nexterp-requests.png)
 
-### Superset Integration (DEV-XXX)
+### Superset Integration (DEV-872)
 
 The Superset workflow (`template/Flowable Account Provisioning - SuperSet.json`) provisions new team members automatically with a view-only role.
 
@@ -253,6 +253,52 @@ Superset's `/api/v1/security/users/` endpoint requires an authenticated admin JW
 - Acceptance: [User sees no dashboard/dataset until granted access](../daily/20261001/superset-dashboard-dataset.png)
 - Acceptance: [Unauthorized request rejection](../daily/20261001/superset-requests.png)
 
+### Outline Integration (DEV-873)
+
+The Outline workflow (`template/Flowable Account Provisioning - Outline.json`) invites new team members automatically with the standard `member` role.
+
+#### Architecture & Invocation Flow
+Outline is invite/SSO based and has no password-provisioned account creation. The workflow therefore uses Outline's invite endpoint with an admin API key (`http://outline:3000` within Docker Compose):
+
+1. **`If` / `Check Secret`**:
+   - Validates `x-provisioning-key` header against `$env.PROVISIONING_SECRET` (only when `$env.PROVISIONING_SECRET_REQUIRED` is true).
+   - Rejects with `401 Unauthorized` on mismatch.
+2. **`Create Account (customize)` / Invite User**:
+   - Calls `POST /api/users.invite` against `http://outline:3000` with `Authorization: Bearer $env.OUTLINE_API_KEY`.
+   - Sends `invites: [{ email, name, role: "member" }]` using `employeeEmail` and `employeeName` from the webhook body.
+   - Role is fixed to `member` (read/write). Never `admin`, `viewer`, or `guest`.
+3. **`Shape Response` & `Respond: Success`**:
+   - Normalizes response to `{ "username": employeeEmail }` and returns `HTTP 201 Created`.
+
+#### Getting the API Key
+The key belongs to an admin user and must be created manually once:
+1. Log in to Outline as an admin (local test: magic link is delivered to Mailpit at `http://localhost:8025`).
+2. Open **Settings → API & Apps → New API key**, give it a name (e.g. `n8n-provisioner`), and copy the token (`ol_api_...`). It is shown only once.
+3. Save it in `.env` as `OUTLINE_API_KEY=ol_api_...`.
+4. Expose it to n8n in `docker-compose.yml` under `automate-service`:
+   - `OUTLINE_URL=http://outline:3000`
+   - `OUTLINE_API_KEY=${OUTLINE_API_KEY}`
+5. Recreate the service: `docker compose up -d --force-recreate automate-service`.
+
+Use a dedicated admin/service account for the key, not a personal one. A wrong or missing key makes Outline return `401`.
+
+#### Password Handling Bypass
+The `password` parameter sent in the ingress webhook is **received but intentionally ignored**:
+- Outline's `users.invite` endpoint does not support setting passwords; Outline has no password login (email magic link or SSO only).
+- The invited user receives an email invitation and signs in via magic link/SSO.
+- Any password supplied in the webhook payload is safely discarded and never transmitted or logged.
+
+#### Notes
+- Invites are rate limited by Outline (`429 rate_limit_exceeded`); avoid retry-on-fail on the invite node.
+- Settings → Members lists users who have signed in; verify pending invites with the filter **Invited** or via `POST /api/users.list` with `{"filter":"invited"}`.
+
+#### Workflow Diagram & Acceptances
+![N8N Outline Workflow](../daily/20261001/outline-workflow.png)
+
+- Acceptance: [Invite created and pending in Outline CLI](../daily/20261001/outline-user-role.png)
+- Acceptance: [Invited with `member` role](../daily/20261001/outline-user-role-ui.png)
+- Acceptance: [Unauthorized request rejection](../daily/20261001/outline-requests.png)
+
 ## 6. Environment Variables
 
 The following environment variables configure the provisioning service and its integration dependencies:
@@ -268,6 +314,14 @@ The following environment variables configure the provisioning service and its i
 | `MATTERMOST_ADMIN_EMAIL` | Yes (Mattermost) | — | Admin email used to authenticate Mattermost account creation. |
 | `MATTERMOST_ADMIN_PASSWORD` | Yes (Mattermost) | — | Admin password used to authenticate Mattermost account creation. |
 | `NEXT_ERP_TOKEN` | Yes (NextERP) | — | API token in the format `<API_KEY>:<API_SECRET>` for NextERP integration user. |
+| `SUPERSET_ADMIN_USER` | Yes (Superset) | `admin` | Admin username used to authenticate Superset account creation. |
+| `SUPERSET_ADMIN_PASSWORD` | Yes (Superset) | `admin` | Admin password used to authenticate Superset account creation. |
+| `SUPERSET_ADMIN_EMAIL` | Yes (Superset) | `admin@local.com` | Admin email used to authenticate Superset account creation. |
+| `SUPERSET_SECRET_KEY` | Yes (Superset) | — | Superset `SECRET_KEY` used for JWT signing. |
+| `OUTLINE_SECRET_KEY` | Yes (Outline) | — | Outline `SECRET_KEY` used for JWT signing. |
+| `OUTLINE_UTILS_SECRET` | Yes (Outline) | — | Outline `UTILS_SECRET` used for utility functions. |
+| `OUTLINE_API_KEY` | Yes (Outline) | — | Outline API key for authentication. |
+| `OUTLINE_RATE_LIMITER_ENABLED` | No | `true` | Whether to enable rate limiting for Outline API requests. |
 
 ---
 
@@ -278,6 +332,7 @@ The following environment variables configure the provisioning service and its i
 - **`template/Flowable Account Provisioning - Mattermost.json`**: Complete, production-ready integration workflow for Mattermost.
 - **`template/Flowable Account Provisioning - NextERP.json`**: Complete, production-ready integration workflow for NextERP (ERPNext).
 - **`template/Flowable Account Provisioning - SuperSet.json`**: Complete, production-ready integration workflow for Apache Superset.
+- **`template/Flowable Account Provisioning - Outline.json`**: Complete, production-ready integration workflow for Outline.
 
 ---
 
@@ -291,7 +346,7 @@ The following environment variables configure the provisioning service and its i
 | 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [DEv-869 - Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
 | 27 Sep 2026 | Create automation invitation for Mattermost. DEV-870 | [DEV-870 Acceptance Evidence](../daily/20260927_DEV-870_Acceptances/) |
 | 29 Sep 2026 | Create automation provisioning NextERP with its detail condition. DEV-871 | [DEV-871 Acceptance Evidence](../daily/20260929_DEV-871_Acceptances/) |
-| 01 Oct 2026 | Create automation provisioning Superset with its detail condition. DEV-872 | [DEV-872 Acceptance Evidence](../daily/20261001/) |
+| 01 Oct 2026 | Create automation provisioning Superset and Outline with their detail conditions. DEV-872, DEV-873 | [DEV-872 and DEV-873 Acceptance Evidence](../daily/20261001/) |
 
 ### Technical Problem & Resolution: Twenty CRM Permissions
 When invoking `CreateWorkspaceMember` on `/graphql` using an API key, Twenty CRM rejects the request with `403 Forbidden` because API keys lack workspace membership management capabilities.
