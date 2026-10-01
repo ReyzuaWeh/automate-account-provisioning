@@ -1,3 +1,18 @@
+x-superset: &superset
+  image: superset-custom:${SUPERSET_VERSION:-6.0.0}
+  build:
+    dockerfile_inline: |
+      FROM apache/superset:${SUPERSET_VERSION:-6.0.0}
+      USER root
+      RUN uv pip install --python /app/.venv/bin/python psycopg2-binary
+      USER superset
+  environment: &superset-env
+    SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY}
+    SUPERSET_DB_URI: postgresql+psycopg2://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/superset
+    SUPERSET_REDIS_URL: redis://superset-redis:6379/0
+  volumes:
+    - ./superset-config.py:/app/pythonpath/superset_config.py:ro
+    - superset-home:/app/superset_home
 services:
   automate-service:
     image: n8nio/n8n
@@ -12,6 +27,15 @@ services:
       - TWENTY_ADMIN_EMAIL=${TWENTY_ADMIN_EMAIL}
       - TWENTY_ADMIN_PASSWORD=${TWENTY_ADMIN_PASSWORD}
       - SERVER_URL=${SERVER_URL:-http://localhost:3000}
+      - MATTERMOST_URL=${MATTERMOST_URL:-http://mattermost:8065}
+      - MATTERMOST_ADMIN_EMAIL=${MATTERMOST_ADMIN_EMAIL}
+      - MATTERMOST_ADMIN_PASSWORD=${MATTERMOST_ADMIN_PASSWORD}
+      - NEXT_ERP_TOKEN=${NEXT_ERP_TOKEN}
+      - SUPERSET_ADMINNAME=${SUPERSET_ADMIN_USER:-admin}
+      - SUPERSET_ADMINPASSWORD=${SUPERSET_ADMIN_PASSWORD:-admin}
+      - OUTLINE_API_KEY=${OUTLINE_API_KEY}
+      - DOCUMENSO_ADMIN_EMAIL=${DOCUMENSO_ADMIN_EMAIL}
+      - DOCUMENSO_ADMIN_PASSWORD=${DOCUMENSO_ADMIN_PASSWORD}
   server:
     image: twentycrm/twenty:${TAG:-latest}
     volumes:
@@ -123,6 +147,7 @@ services:
     image: postgres:16
     volumes:
       - db-data:/var/lib/postgresql/data
+      - ./database/init-dbs.sql:/docker-entrypoint-initdb.d/init-dbs.sql
     environment:
       POSTGRES_DB: ${PG_DATABASE_NAME:-default}
       POSTGRES_PASSWORD: ${PG_DATABASE_PASSWORD:-postgres}
@@ -143,8 +168,329 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+  mattermost:
+    image: mattermost/mattermost-team-edition
+    ports:
+      - "8065:8065"
+    environment:
+      MM_SQLSETTINGS_DRIVERNAME: postgres
+      MM_SQLSETTINGS_DATASOURCE: "postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/mattermost?sslmode=disable"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: always
+
+
+  erpnext-db:
+    image: mariadb:11.8
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      start_period: 5s
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: on-failure
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --skip-character-set-client-handshake
+    environment:
+      MYSQL_ROOT_PASSWORD: ${ERPNEXT_DB_ROOT_PASSWORD:-admin}
+      MARIADB_ROOT_PASSWORD: ${ERPNEXT_DB_ROOT_PASSWORD:-admin}
+    volumes:
+      - erpnext-db-data:/var/lib/mysql
+ 
+  erpnext-redis-queue:
+    image: redis:6.2-alpine
+    restart: on-failure
+    volumes:
+      - erpnext-redis-queue-data:/data
+ 
+  erpnext-redis-cache:
+    image: redis:6.2-alpine
+    restart: on-failure
+ 
+  erpnext-configurator:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: "no"
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        ls -1 apps > sites/apps.txt;
+        bench set-config -g db_host $$DB_HOST;
+        bench set-config -gp db_port $$DB_PORT;
+        bench set-config -g redis_cache "redis://$$REDIS_CACHE";
+        bench set-config -g redis_queue "redis://$$REDIS_QUEUE";
+        bench set-config -g redis_socketio "redis://$$REDIS_QUEUE";
+        bench set-config -gp socketio_port $$SOCKETIO_PORT;
+    environment:
+      DB_HOST: erpnext-db
+      DB_PORT: "3306"
+      REDIS_CACHE: erpnext-redis-cache:6379
+      REDIS_QUEUE: erpnext-redis-queue:6379
+      SOCKETIO_PORT: "9000"
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+ 
+  erpnext-create-site:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: "no"
+    depends_on:
+      erpnext-configurator:
+        condition: service_completed_successfully
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    entrypoint:
+      - bash
+      - -c
+    command:
+      - >
+        wait-for-it -t 120 erpnext-db:3306;
+        wait-for-it -t 120 erpnext-redis-cache:6379;
+        wait-for-it -t 120 erpnext-redis-queue:6379;
+        export start=`date +%s`;
+        until [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".db_host // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_cache // empty"` ]] && \
+          [[ -n `grep -hs ^ sites/common_site_config.json | jq -r ".redis_queue // empty"` ]];
+        do
+          echo "Waiting for sites/common_site_config.json to be created";
+          sleep 5;
+          if (( `date +%s`-start > 120 )); then
+            echo "could not find sites/common_site_config.json with required keys";
+            exit 1
+          fi
+        done;
+        echo "sites/common_site_config.json found";
+        if [ -d "sites/frontend" ]; then
+          echo "Site frontend already exists, skipping creation";
+        else
+          bench new-site --mariadb-user-host-login-scope='%' --admin-password=${ERPNEXT_ADMIN_PASSWORD:-admin} --db-root-username=root --db-root-password=${ERPNEXT_DB_ROOT_PASSWORD:-admin} --install-app erpnext --set-default frontend;
+        fi;
+ 
+  erpnext-backend:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: on-failure
+    depends_on:
+      erpnext-create-site:
+        condition: service_completed_successfully
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    environment:
+      DB_HOST: erpnext-db
+      DB_PORT: "3306"
+ 
+  erpnext-frontend:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: on-failure
+    depends_on:
+      - erpnext-websocket
+      - erpnext-backend
+    command:
+      - nginx-entrypoint.sh
+    environment:
+      BACKEND: erpnext-backend:8000
+      FRAPPE_SITE_NAME_HEADER: frontend
+      SOCKETIO: erpnext-websocket:9000
+      UPSTREAM_REAL_IP_ADDRESS: 127.0.0.1
+      UPSTREAM_REAL_IP_HEADER: X-Forwarded-For
+      UPSTREAM_REAL_IP_RECURSIVE: "off"
+      PROXY_READ_TIMEOUT: 120
+      CLIENT_MAX_BODY_SIZE: 50m
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    ports:
+      - "8080:8080"
+ 
+  erpnext-queue-long:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: on-failure
+    command: ["bench", "worker", "--queue", "long,default,short"]
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_REDIS_CACHE: redis://erpnext-redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://erpnext-redis-queue:6379
+    depends_on:
+      erpnext-configurator:
+        condition: service_completed_successfully
+ 
+  erpnext-queue-short:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: on-failure
+    command: ["bench", "worker", "--queue", "short,default"]
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    environment:
+      FRAPPE_REDIS_CACHE: redis://erpnext-redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://erpnext-redis-queue:6379
+    depends_on:
+      erpnext-configurator:
+        condition: service_completed_successfully
+ 
+  erpnext-scheduler:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: on-failure
+    command: ["bench", "schedule"]
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-configurator:
+        condition: service_completed_successfully
+ 
+  erpnext-websocket:
+    image: frappe/erpnext:${ERPNEXT_VERSION:-v16.36.0}
+    restart: on-failure
+    command:
+      - node
+      - /home/frappe/frappe-bench/apps/frappe/socketio.js
+    environment:
+      FRAPPE_REDIS_CACHE: redis://erpnext-redis-cache:6379
+      FRAPPE_REDIS_QUEUE: redis://erpnext-redis-queue:6379
+    volumes:
+      - erpnext-sites:/home/frappe/frappe-bench/sites
+      - erpnext-logs:/home/frappe/frappe-bench/logs
+    depends_on:
+      erpnext-configurator:
+        condition: service_completed_successfully
+
+  superset-redis:
+    image: redis:7-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  superset-init:
+    <<: *superset
+    restart: "no"
+    user: root
+    environment:
+      <<: *superset-env
+      SUPERSET_ADMIN_USER: ${SUPERSET_ADMIN_USER:-admin}
+      SUPERSET_ADMIN_PASSWORD: ${SUPERSET_ADMIN_PASSWORD:-admin}
+      SUPERSET_ADMIN_EMAIL: ${SUPERSET_ADMIN_EMAIL:-admin@local.com}
+    command:
+      - bash
+      - -c
+      - >
+        superset db upgrade &&
+        (superset fab create-admin --username "$$SUPERSET_ADMIN_USER" --firstname Admin --lastname Admin --email "$$SUPERSET_ADMIN_EMAIL" --password "$$SUPERSET_ADMIN_PASSWORD" || true) &&
+        superset init
+    depends_on:
+      db:
+        condition: service_healthy
+      superset-redis:
+        condition: service_healthy
+
+  superset:
+    <<: *superset
+    command: ["/usr/bin/run-server.sh"]
+    ports:
+      - "8088:8088"
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8088/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    restart: always
+
+  outline:
+    image: outlinewiki/outline:latest
+    ports:
+      - "3001:3000"
+    environment:
+      NODE_ENV: production
+      URL: http://localhost:3001
+      PORT: 3000
+      SECRET_KEY: ${OUTLINE_SECRET_KEY}
+      UTILS_SECRET: ${OUTLINE_UTILS_SECRET}
+      DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/outline
+      PGSSLMODE: disable
+      REDIS_URL: redis://outline-redis:6379
+      FORCE_HTTPS: "false"
+      FILE_STORAGE: local
+      FILE_STORAGE_LOCAL_ROOT_DIR: /var/lib/outline/data
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_SECURE: "false"
+      SMTP_FROM_EMAIL: outline@local.com
+      RATE_LIMITER_ENABLED: ${OUTLINE_RATE_LIMITER_ENABLED:-true}
+    volumes:
+      - outline-data:/var/lib/outline/data
+    depends_on:
+      db:
+        condition: service_healthy
+      outline-redis:
+        condition: service_healthy
+    restart: always
+
+  outline-redis:
+    image: redis:7-alpine
+    restart: always
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "8025:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    restart: always
+
+  documenso:
+    image: documenso/documenso:latest
+    ports:
+      - "3002:3000"
+    environment:
+      PORT: 3000
+      NEXTAUTH_SECRET: ${DOCUMENSO_NEXTAUTH_SECRET}
+      NEXT_PRIVATE_ENCRYPTION_KEY: ${DOCUMENSO_ENCRYPTION_KEY}
+      NEXT_PRIVATE_ENCRYPTION_SECONDARY_KEY: ${DOCUMENSO_ENCRYPTION_SECONDARY_KEY}
+      NEXT_PUBLIC_WEBAPP_URL: ${DOCUMENSO_URL:-http://localhost:3002}
+      NEXT_PRIVATE_INTERNAL_WEBAPP_URL: http://localhost:3000
+      NEXT_PRIVATE_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/documenso
+      NEXT_PRIVATE_DIRECT_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/documenso
+      NEXT_PRIVATE_SMTP_TRANSPORT: smtp-auth
+      NEXT_PRIVATE_SMTP_HOST: mailpit
+      NEXT_PRIVATE_SMTP_PORT: 1025
+      NEXT_PRIVATE_SMTP_USERNAME: documenso
+      NEXT_PRIVATE_SMTP_PASSWORD: documenso
+      NEXT_PRIVATE_SMTP_UNSAFE_IGNORE_TLS: "true"
+      NEXT_PRIVATE_SMTP_FROM_NAME: Documenso
+      NEXT_PRIVATE_SMTP_FROM_ADDRESS: documenso@local.com
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
+    restart: always
 
 volumes:
   db-data:
   server-local-data:
   automate-service-data:
+  erpnext-db-data:
+  erpnext-redis-queue-data:
+  erpnext-sites:
+  erpnext-logs:
+  superset-home:
+  outline-data:
