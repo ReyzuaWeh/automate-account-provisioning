@@ -96,7 +96,7 @@
         },
         "sendBody": true,
         "specifyBody": "json",
-        "jsonBody": "={\n    \"invites\": [\n        {\n            \"email\": \"{{ $('Webhook').item.json.body.employeeEmail }}\",\n            \"name\": \"{{ $('Webhook').item.json.body.employeeName.replaceAll(\" \", \".\").toLowerCase() }}\",\n            \"role\": \"viewer\"\n        }\n    ]\n}",
+        "jsonBody": "={\n    \"invites\": [\n        {\n            \"email\": \"{{ $('Webhook').item.json.body.employeeEmail }}\",\n            \"name\": \"{{ $('Webhook').item.json.body.employeeName.replaceAll(\" \", \".\").toLowerCase() }}\",\n            \"role\": \"member\"\n        }\n    ]\n}",
         "options": {}
       },
       "type": "n8n-nodes-base.httpRequest",
@@ -278,7 +278,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "49229c66-a023-4d5e-851a-b85ad8a0d795",
+  "versionId": "4e431081-6b39-43e8-84e7-2106d23fa947",
   "meta": {
     "instanceId": "95495b3354e32568932410280b52349480756483b60c51819567c6685078c3ca"
   },
