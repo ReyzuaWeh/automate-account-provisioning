@@ -34,6 +34,8 @@ services:
       - SUPERSET_ADMINNAME=${SUPERSET_ADMIN_USER:-admin}
       - SUPERSET_ADMINPASSWORD=${SUPERSET_ADMIN_PASSWORD:-admin}
       - OUTLINE_API_KEY=${OUTLINE_API_KEY}
+      - DOCUMENSO_ADMIN_EMAIL=${DOCUMENSO_ADMIN_EMAIL}
+      - DOCUMENSO_ADMIN_PASSWORD=${DOCUMENSO_ADMIN_PASSWORD}
   server:
     image: twentycrm/twenty:${TAG:-latest}
     volumes:
@@ -449,6 +451,37 @@ services:
     image: axllent/mailpit
     ports:
       - "8025:8025"
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    restart: always
+
+  documenso:
+    image: documenso/documenso:latest
+    ports:
+      - "3002:3000"
+    environment:
+      PORT: 3000
+      NEXTAUTH_SECRET: ${DOCUMENSO_NEXTAUTH_SECRET}
+      NEXT_PRIVATE_ENCRYPTION_KEY: ${DOCUMENSO_ENCRYPTION_KEY}
+      NEXT_PRIVATE_ENCRYPTION_SECONDARY_KEY: ${DOCUMENSO_ENCRYPTION_SECONDARY_KEY}
+      NEXT_PUBLIC_WEBAPP_URL: ${DOCUMENSO_URL:-http://localhost:3002}
+      NEXT_PRIVATE_INTERNAL_WEBAPP_URL: http://localhost:3000
+      NEXT_PRIVATE_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/documenso
+      NEXT_PRIVATE_DIRECT_DATABASE_URL: postgres://${PG_DATABASE_USER:-postgres}:${PG_DATABASE_PASSWORD:-postgres}@db:5432/documenso
+      NEXT_PRIVATE_SMTP_TRANSPORT: smtp-auth
+      NEXT_PRIVATE_SMTP_HOST: mailpit
+      NEXT_PRIVATE_SMTP_PORT: 1025
+      NEXT_PRIVATE_SMTP_USERNAME: documenso
+      NEXT_PRIVATE_SMTP_PASSWORD: documenso
+      NEXT_PRIVATE_SMTP_UNSAFE_IGNORE_TLS: "true"
+      NEXT_PRIVATE_SMTP_FROM_NAME: Documenso
+      NEXT_PRIVATE_SMTP_FROM_ADDRESS: documenso@local.com
+    depends_on:
+      db:
+        condition: service_healthy
+      mailpit:
+        condition: service_started
     restart: always
 
 volumes:

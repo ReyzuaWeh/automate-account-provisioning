@@ -7,7 +7,11 @@ Every tool-specific workflow originates from the canonical base template (`templ
 
 - **DEV-868**: Account Provisioning Base Framework & Ingress Security
 - **DEV-869**: Twenty CRM Account Provisioning Integration
-- **DEV-870**: Mat
+- **DEV-870**: Mattermost Account Provisioning Integration
+- **DEV-871**: NextERP (ERPNext) Account Provisioning Integration
+- **DEV-872**: Superset Account Provisioning Integration
+- **DEV-873**: Outline Account Provisioning Integration
+- **DEV-874**: Documenso Account Provisioning Integration
 
 ---
 
@@ -299,6 +303,54 @@ The `password` parameter sent in the ingress webhook is **received but intention
 - Acceptance: [Invited with `member` role](../daily/20261001/outline-user-role-ui.png)
 - Acceptance: [Unauthorized request rejection](../daily/20261001/outline-requests.png)
 
+### Documenso Integration (DEV-874)
+
+The Documenso workflow (`template/Flowable Account Provisioning - Documenso.json`) invites new members to the Documenso organisation with the standard **Member** role, so a new hire can send and sign documents without admin rights.
+
+#### Architecture & Invocation Flow
+The public REST API (`/api/v2`) **cannot be used to invite organisation members**. Its reference has no endpoint for organisation or team invites, and API tokens only cover documents and templates. The workflow therefore calls the internal tRPC endpoints that the Documenso web UI itself uses (`http://documenso:3000/api/trpc/...` inside Docker Compose), authenticated with an admin session cookie instead of an API token:
+
+1. **`Webhook` / `If` / `Check Secret`**:
+   - Receives the provisioning request and validates the `x-provisioning-key` header against `$env.PROVISIONING_SECRET`.
+   - Invalid secret returns `HTTP 401` (`Respond: Unauthorized`).
+2. **`Get CSRF`**:
+   - Calls `GET /api/auth/csrf` to obtain the CSRF token and its cookie.
+3. **`Get Admin Access`**:
+   - Calls `POST /api/auth/email-password/authorize` using `$env.DOCUMENSO_ADMIN_EMAIL`, `$env.DOCUMENSO_ADMIN_PASSWORD` and the CSRF token.
+   - Obtains the admin session cookie (`set-cookie`).
+4. **`Get Organization ID`**:
+   - Calls `GET /api/trpc/organisation.getMany` with the session cookie.
+   - Resolves the organisation ID (the first organisation returned).
+5. **`Create Account (customize)` / Send Invitation**:
+   - Calls `POST /api/trpc/organisation.member.invite.createMany` with `organisationId`, `$json.body.employeeEmail` and `organisationRole: "MEMBER"`.
+   - The role is hardcoded to `MEMBER`. Admin and Manager are never used for standard provisioning.
+6. **`Shape Response` & `Respond: Success`**:
+   - Normalizes the response to `{ "username": employeeEmail }` and returns `HTTP 201 Created`.
+
+#### Required Environment Variables
+`PROVISIONING_SECRET`, `PROVISIONING_SECRET_REQUIRED`, `DOCUMENSO_ADMIN_EMAIL`, `DOCUMENSO_ADMIN_PASSWORD`. The admin account must be an admin of the target organisation and have a verified email.
+
+#### Password Handling Bypass
+The `password` parameter sent in the ingress webhook is **received but intentionally ignored**:
+- Documenso's organisation invite flow does not support setting a password.
+- The invited user receives an email invitation and sets their own password when accepting it.
+- Any password supplied in the webhook payload is discarded and never transmitted or logged.
+
+#### Pending Status
+The account is **pending** until the invitee accepts the email invitation. The workflow can only trigger the invite and cannot force immediate activation. The invitee must also be added to a team after accepting, which is a separate step and is not covered by this workflow.
+
+#### Limitations
+- The tRPC endpoints are internal and unofficial, so they may change between Documenso versions. Re-check the workflow after upgrading Documenso.
+- Authentication is session-based, and the workflow logs in again on every execution.
+- Only the first organisation returned by `organisation.getMany` is used.
+
+#### Workflow Diagram & Acceptances
+![N8N Documenso Workflow](../daily/20261001/documentso-workflow.png)
+
+- Acceptance: [Invite visible as pending under Admin → Organisations → Members and Role is Member, not Admin/Manager](../daily/20261001/documenso-user-role.png)
+- Acceptance: [Unauthorized request rejection (401)](../daily/20261001/documentso-requests.png)
+
+
 ## 6. Environment Variables
 
 The following environment variables configure the provisioning service and its integration dependencies:
@@ -322,6 +374,8 @@ The following environment variables configure the provisioning service and its i
 | `OUTLINE_UTILS_SECRET` | Yes (Outline) | — | Outline `UTILS_SECRET` used for utility functions. |
 | `OUTLINE_API_KEY` | Yes (Outline) | — | Outline API key for authentication. |
 | `OUTLINE_RATE_LIMITER_ENABLED` | No | `true` | Whether to enable rate limiting for Outline API requests. |
+| `DOCUMENSO_ADMIN_EMAIL` | Yes (Documenso) | — | Admin email used to authenticate Documenso organisation invite. |
+| `DOCUMENSO_ADMIN_PASSWORD` | Yes (Documenso) | — | Admin password used to authenticate Documenso organisation invite. |
 
 ---
 
@@ -333,6 +387,7 @@ The following environment variables configure the provisioning service and its i
 - **`template/Flowable Account Provisioning - NextERP.json`**: Complete, production-ready integration workflow for NextERP (ERPNext).
 - **`template/Flowable Account Provisioning - SuperSet.json`**: Complete, production-ready integration workflow for Apache Superset.
 - **`template/Flowable Account Provisioning - Outline.json`**: Complete, production-ready integration workflow for Outline.
+- **`template/Flowable Account Provisioning - Documenso.json`**: Complete, production-ready integration workflow for Documenso.
 
 ---
 
@@ -346,7 +401,7 @@ The following environment variables configure the provisioning service and its i
 | 13 Sep 2026 | Resolved Twenty CRM member invitation via `/metadata` user admin mutation | [DEv-869 - Acceptance Evidence](../daily/20260913_DEV-869_Acceptances/) |
 | 27 Sep 2026 | Create automation invitation for Mattermost. DEV-870 | [DEV-870 Acceptance Evidence](../daily/20260927_DEV-870_Acceptances/) |
 | 29 Sep 2026 | Create automation provisioning NextERP with its detail condition. DEV-871 | [DEV-871 Acceptance Evidence](../daily/20260929_DEV-871_Acceptances/) |
-| 01 Oct 2026 | Create automation provisioning Superset and Outline with their detail conditions. DEV-872, DEV-873 | [DEV-872 and DEV-873 Acceptance Evidence](../daily/20261001/) |
+| 01 Oct 2026 | Create automation provisioning Superset, Outline, and Documenso with their detail conditions. DEV-872, DEV-873, DEV-874 | [DEV-872, DEV-873, and DEV-874 Acceptance Evidence](../daily/20261001/) |
 
 ### Technical Problem & Resolution: Twenty CRM Permissions
 When invoking `CreateWorkspaceMember` on `/graphql` using an API key, Twenty CRM rejects the request with `403 Forbidden` because API keys lack workspace membership management capabilities.
